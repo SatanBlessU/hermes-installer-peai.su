@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Полный автоматический инсталлятор: Hermes Agent + Hermes WebUI для Ubuntu Server
+# Автоматический инсталлятор: Hermes Agent + Hermes WebUI для Ubuntu Server
 # Репозиторий WebUI: https://github.com/nesquena/hermes-webui
 # Провайдер модели: https://api.peai.su/v1
+# Стандартная модель: ds/deepseek-v4-flash
 # ==============================================================================
 
 set -Eeuo pipefail
@@ -43,7 +44,7 @@ fi
 # Параметры по умолчанию
 PEAI_BASE_URL="https://api.peai.su/v1"
 PEAI_API_KEY=""
-DEFAULT_MODEL="peai-model"
+DEFAULT_MODEL="ds/deepseek-v4-flash"
 WEBUI_HOST="0.0.0.0"
 WEBUI_PORT="8787"
 WEBUI_DIR="/opt/hermes-webui"
@@ -118,14 +119,14 @@ if [[ -n "${PEAI_API_KEY}" ]]; then
 else
   log_info "API-ключ PEAI:        <ПУСТОЙ> (будет записан в конфигурацию)"
 fi
-log_info "Модель:               ${DEFAULT_MODEL}"
+log_info "Модель по умолчанию:  ${DEFAULT_MODEL}"
 log_info "Порт WebUI:           ${WEBUI_PORT} (Host: ${WEBUI_HOST})"
 echo "=================================================================="
 
 # ------------------------------------------------------------------------------
-# 3. Обновление системы (apt update && full-upgrade) и системные утилиты
+# 3. Обновление системы (apt update && upgrade) и системные пакеты
 # ------------------------------------------------------------------------------
-log_info "Шаг 1/5: Обновление системы (apt update && apt full-upgrade)..."
+log_info "Шаг 1/5: Обновление системы (apt update && apt upgrade)..."
 
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
@@ -134,7 +135,7 @@ apt-get update -y
 apt-get -y \
   -o Dpkg::Options::=--force-confdef \
   -o Dpkg::Options::=--force-confold \
-  full-upgrade
+  upgrade
 
 apt-get install -y --no-install-recommends \
     curl \
@@ -154,8 +155,10 @@ apt-get install -y --no-install-recommends \
 # ------------------------------------------------------------------------------
 log_info "Шаг 2/5: Установка Hermes Agent..."
 
+pkill -9 -f 'hermes setup' 2>/dev/null || true
+
 su - "$TARGET_USER" -c 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive' || {
-    log_warn "Официальный скрипт вернул код, устанавливаем через astral uv..."
+    log_warn "Официальный curl-скрипт вернул код ошибки, разворачиваем через astral uv..."
     su - "$TARGET_USER" -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
     su - "$TARGET_USER" -c 'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" && uv tool install hermes-agent || true'
 }
@@ -178,9 +181,9 @@ if [[ -n "$HERMES_BIN" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Применение кастомного провайдера PEAI (config.yaml и .env)
+# 5. Применение кастомного провайдера PEAI и модели ds/deepseek-v4-flash
 # ------------------------------------------------------------------------------
-log_info "Шаг 3/5: Настройка кастомного провайдера PEAI (${PEAI_BASE_URL})..."
+log_info "Шаг 3/5: Настройка провайдера PEAI (${PEAI_BASE_URL}) и модели ${DEFAULT_MODEL}..."
 
 mkdir -p "${HERMES_CONFIG_DIR}"
 
@@ -192,6 +195,11 @@ model:
   base_url: "${PEAI_BASE_URL}"
   api_key: "${PEAI_API_KEY}"
   aliases:
+    ds:
+      model: "${DEFAULT_MODEL}"
+      provider: custom
+      base_url: "${PEAI_BASE_URL}"
+      api_key: "${PEAI_API_KEY}"
     peai:
       model: "${DEFAULT_MODEL}"
       provider: custom
@@ -219,13 +227,14 @@ HERMES_BASE_URL="${PEAI_BASE_URL}"
 HERMES_API_KEY="${PEAI_API_KEY}"
 PEAI_BASE_URL="${PEAI_BASE_URL}"
 PEAI_API_KEY="${PEAI_API_KEY}"
+HERMES_WEBUI_DEFAULT_MODEL="${DEFAULT_MODEL}"
 EOF
 
 chown -R "${TARGET_USER}:${TARGET_USER}" "${HERMES_CONFIG_DIR}"
 chmod 600 "${HERMES_CONFIG_DIR}/.env"
 chmod 644 "${HERMES_CONFIG_DIR}/config.yaml"
 
-# Применение через официальный CLI (чтобы инициализировать схему)
+# Применение конфигурации через официальный CLI
 su - "$TARGET_USER" -c "
   export PATH=\"\$HOME/.local/bin:/usr/local/bin:\$PATH\"
   if command -v hermes >/dev/null 2>&1; then
@@ -236,14 +245,17 @@ su - "$TARGET_USER" -c "
   fi
 "
 
-log_success "Конфигурация PEAI записана."
+log_success "Конфигурация PEAI и модели ${DEFAULT_MODEL} записана."
 
 # ------------------------------------------------------------------------------
-# 6. Установка и запуск Hermes WebUI (Quick Start / ctl.sh)
+# 6. Установка и настройка Hermes WebUI
 # ------------------------------------------------------------------------------
 log_info "Шаг 4/5: Развертывание Hermes WebUI..."
 
 mkdir -p "$(dirname "$WEBUI_DIR")"
+
+# Остановка старой службы при повторной установке
+systemctl stop hermes-webui.service 2>/dev/null || true
 
 if [[ -d "${WEBUI_DIR}/.git" ]]; then
     log_info "Обновление существующего репозитория WebUI..."
@@ -256,51 +268,45 @@ fi
 
 cd "${WEBUI_DIR}"
 
-# Настройка .env для WebUI: открываем наружу на 0.0.0.0 и порт 8787
 cat <<EOF > "${WEBUI_DIR}/.env"
 HERMES_WEBUI_HOST=${WEBUI_HOST}
 HERMES_WEBUI_PORT=${WEBUI_PORT}
 HERMES_HOME=${HERMES_CONFIG_DIR}
+HERMES_WEBUI_DEFAULT_MODEL=${DEFAULT_MODEL}
 OPENAI_BASE_URL=${PEAI_BASE_URL}
 OPENAI_API_KEY=${PEAI_API_KEY}
-PEAI_API_KEY=${PEAI_API_KEY}
+HERMES_WEBUI_CTL_ALLOW_SYSTEMD_CONFLICT=1
 EOF
 
 chmod +x "${WEBUI_DIR}/ctl.sh"
 chown -R "${TARGET_USER}:${TARGET_USER}" "${WEBUI_DIR}"
 
-# Остановка старого процесса перед регистрацией в systemd
-su - "$TARGET_USER" -c "cd ${WEBUI_DIR} && ./ctl.sh stop 2>/dev/null || true"
-
-# Открытие портов в фаерволе если активен
-if ufw status | grep -qw "active"; then
+if ufw status 2>/dev/null | grep -qw "active"; then
   ufw allow "${WEBUI_PORT}/tcp" || true
 fi
 
 # ------------------------------------------------------------------------------
-# 7. Настройка Systemd автозапуска
+# 7. Настройка Systemd автозапуска (Надёжный Type=simple с bootstrap.py)
 # ------------------------------------------------------------------------------
-log_info "Шаг 5/5: Настройка автозапуска (systemd)..."
+log_info "Шаг 5/5: Настройка Systemd службы автозапуска..."
 
-# 7.1. Hermes WebUI Service (на базе ctl.sh)
 cat <<EOF > /etc/systemd/system/hermes-webui.service
 [Unit]
-Description=Hermes Web UI Daemon (ctl.sh)
+Description=Hermes Web UI Service
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=forking
+Type=simple
 User=${TARGET_USER}
 WorkingDirectory=${WEBUI_DIR}
 Environment=HOME=${TARGET_HOME}
 Environment=HERMES_HOME=${HERMES_CONFIG_DIR}
+Environment=HERMES_WEBUI_HOST=${WEBUI_HOST}
+Environment=HERMES_WEBUI_PORT=${WEBUI_PORT}
 EnvironmentFile=-${WEBUI_DIR}/.env
-PIDFile=${HERMES_CONFIG_DIR}/webui.pid
-ExecStart=${WEBUI_DIR}/ctl.sh start
-ExecStop=${WEBUI_DIR}/ctl.sh stop
-ExecReload=${WEBUI_DIR}/ctl.sh restart
-Restart=on-failure
+ExecStart=/usr/bin/python3 ${WEBUI_DIR}/bootstrap.py --no-browser --foreground --host ${WEBUI_HOST} ${WEBUI_PORT}
+Restart=always
 RestartSec=5
 
 [Install]
@@ -309,13 +315,13 @@ EOF
 
 systemctl daemon-reload
 systemctl enable hermes-webui.service
-systemctl restart hermes-webui.service || true
+systemctl restart hermes-webui.service
 
 # Ожидание старта
-sleep 3
+sleep 4
 
 # ------------------------------------------------------------------------------
-# 8. Проверка и финальный вывод
+# 8. Проверка работоспособности
 # ------------------------------------------------------------------------------
 WEBUI_ENABLED=$(systemctl is-enabled hermes-webui.service 2>/dev/null || echo "not-found")
 WEBUI_ACTIVE=$(systemctl is-active hermes-webui.service 2>/dev/null || echo "inactive")
@@ -326,7 +332,8 @@ echo "=================================================================="
 echo -e "${GREEN}${BOLD}             УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
 echo "=================================================================="
 echo -e " • Hermes WebUI в автозапуске:  ${BOLD}${WEBUI_ENABLED}${NC} (Статус: ${WEBUI_ACTIVE})"
-echo -e " • Провайдер API:               ${CYAN}${PEAI_BASE_URL}${NC}"
+echo -e " • Провайдер LLM:               ${CYAN}${PEAI_BASE_URL}${NC}"
+echo -e " • Модель по умолчанию:         ${GREEN}${DEFAULT_MODEL}${NC}"
 if [[ -n "${PEAI_API_KEY}" ]]; then
   echo -e " • API-ключ:                    ${GREEN}Задан (${PEAI_API_KEY:0:7}***)${NC}"
 else
@@ -334,6 +341,8 @@ else
 fi
 echo -e " • Панель WebUI доступна по:    ${BOLD}http://${SERVER_IP}:${WEBUI_PORT}${NC}"
 echo "=================================================================="
-echo -e "${BOLD}Статус ctl.sh:${NC}"
-su - "$TARGET_USER" -c "cd ${WEBUI_DIR} && ./ctl.sh status" || true
+echo -e "${BOLD}Команды управления:${NC}"
+echo "  sudo systemctl status hermes-webui     # Статус службы"
+echo "  sudo journalctl -u hermes-webui -f     # Логи в реальном времени"
+echo "  sudo systemctl restart hermes-webui    # Перезапуск службы"
 echo "=================================================================="
