@@ -145,6 +145,9 @@ apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
     python3-pip \
+    libatomic1 \
+    libgomp1 \
+    ffmpeg \
     tar \
     unzip \
     systemd \
