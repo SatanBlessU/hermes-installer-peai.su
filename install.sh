@@ -3,7 +3,7 @@
 # Автоматический инсталлятор: Hermes Agent + Hermes WebUI для Ubuntu Server
 # Репозиторий WebUI: https://github.com/nesquena/hermes-webui
 # Провайдер модели: https://api.peai.su/v1
-# Стандартная модель: ds/deepseek-v4-flash
+# Модель по умолчанию: ds/deepseek-v4-flash
 # ==============================================================================
 
 set -Eeuo pipefail
@@ -124,7 +124,7 @@ log_info "Порт WebUI:           ${WEBUI_PORT} (Host: ${WEBUI_HOST})"
 echo "=================================================================="
 
 # ------------------------------------------------------------------------------
-# 3. Обновление системы (apt update && upgrade) и системные пакеты
+# 3. Обновление системы (apt update && upgrade) и базовые пакеты
 # ------------------------------------------------------------------------------
 log_info "Шаг 1/5: Обновление системы (apt update && apt upgrade)..."
 
@@ -151,14 +151,14 @@ apt-get install -y --no-install-recommends \
     ufw
 
 # ------------------------------------------------------------------------------
-# 4. Установка Hermes Agent
+# 4. Установка Hermes Agent и определение Python-окружения
 # ------------------------------------------------------------------------------
 log_info "Шаг 2/5: Установка Hermes Agent..."
 
 pkill -9 -f 'hermes setup' 2>/dev/null || true
 
 su - "$TARGET_USER" -c 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive' || {
-    log_warn "Официальный curl-скрипт вернул код ошибки, разворачиваем через astral uv..."
+    log_warn "Официальный curl-скрипт завершился с ошибкой, разворачиваем через astral uv..."
     su - "$TARGET_USER" -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
     su - "$TARGET_USER" -c 'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" && uv tool install hermes-agent || true'
 }
@@ -179,6 +179,36 @@ if [[ -n "$HERMES_BIN" ]]; then
   ln -sf "$HERMES_BIN" /usr/local/bin/hermes || true
   log_success "Hermes Agent бинарник: ${HERMES_BIN}"
 fi
+
+# Точное определение Python-интерпретатора агента
+HERMES_PYTHON=""
+if [[ -n "$HERMES_BIN" && -f "$HERMES_BIN" ]]; then
+  FIRST_LINE=$(head -n 1 "$HERMES_BIN" 2>/dev/null || true)
+  if [[ "$FIRST_LINE" =~ ^#!(.*) ]]; then
+    CAND_PY="${BASH_REMATCH[1]}"
+    CAND_PY=$(echo "$CAND_PY" | awk '{print $1}')
+    if [[ -x "$CAND_PY" ]]; then
+      HERMES_PYTHON="$CAND_PY"
+    fi
+  fi
+fi
+
+if [[ -z "$HERMES_PYTHON" || ! -x "$HERMES_PYTHON" ]]; then
+  for py_cand in \
+    "${TARGET_HOME}/.local/share/uv/tools/hermes-agent/bin/python3" \
+    "${TARGET_HOME}/.local/share/uv/tools/hermes-agent/bin/python" \
+    "${TARGET_HOME}/.hermes/hermes-agent/.venv/bin/python3" \
+    "${TARGET_HOME}/.hermes/.venv/bin/python3" \
+    $(find "${TARGET_HOME}/.hermes" -type f -name "python3" -perm -111 2>/dev/null || true) \
+    "$(which python3)"; do
+    if [[ -n "$py_cand" && -x "$py_cand" ]]; then
+      HERMES_PYTHON="$py_cand"
+      break
+    fi
+  done
+fi
+
+log_success "Интерпретатор Python агента: ${HERMES_PYTHON}"
 
 # ------------------------------------------------------------------------------
 # 5. Применение кастомного провайдера PEAI и модели ds/deepseek-v4-flash
@@ -228,13 +258,13 @@ HERMES_API_KEY="${PEAI_API_KEY}"
 PEAI_BASE_URL="${PEAI_BASE_URL}"
 PEAI_API_KEY="${PEAI_API_KEY}"
 HERMES_WEBUI_DEFAULT_MODEL="${DEFAULT_MODEL}"
+HERMES_WEBUI_PYTHON="${HERMES_PYTHON}"
 EOF
 
 chown -R "${TARGET_USER}:${TARGET_USER}" "${HERMES_CONFIG_DIR}"
 chmod 600 "${HERMES_CONFIG_DIR}/.env"
 chmod 644 "${HERMES_CONFIG_DIR}/config.yaml"
 
-# Применение конфигурации через официальный CLI
 su - "$TARGET_USER" -c "
   export PATH=\"\$HOME/.local/bin:/usr/local/bin:\$PATH\"
   if command -v hermes >/dev/null 2>&1; then
@@ -245,7 +275,7 @@ su - "$TARGET_USER" -c "
   fi
 "
 
-log_success "Конфигурация PEAI и модели ${DEFAULT_MODEL} записана."
+log_success "Конфигурация PEAI и модели ${DEFAULT_MODEL} успешно сохранена."
 
 # ------------------------------------------------------------------------------
 # 6. Установка и настройка Hermes WebUI
@@ -253,8 +283,6 @@ log_success "Конфигурация PEAI и модели ${DEFAULT_MODEL} за
 log_info "Шаг 4/5: Развертывание Hermes WebUI..."
 
 mkdir -p "$(dirname "$WEBUI_DIR")"
-
-# Остановка старой службы при повторной установке
 systemctl stop hermes-webui.service 2>/dev/null || true
 
 if [[ -d "${WEBUI_DIR}/.git" ]]; then
@@ -273,6 +301,7 @@ HERMES_WEBUI_HOST=${WEBUI_HOST}
 HERMES_WEBUI_PORT=${WEBUI_PORT}
 HERMES_HOME=${HERMES_CONFIG_DIR}
 HERMES_WEBUI_DEFAULT_MODEL=${DEFAULT_MODEL}
+HERMES_WEBUI_PYTHON=${HERMES_PYTHON}
 OPENAI_BASE_URL=${PEAI_BASE_URL}
 OPENAI_API_KEY=${PEAI_API_KEY}
 HERMES_WEBUI_CTL_ALLOW_SYSTEMD_CONFLICT=1
@@ -286,7 +315,7 @@ if ufw status 2>/dev/null | grep -qw "active"; then
 fi
 
 # ------------------------------------------------------------------------------
-# 7. Настройка Systemd автозапуска (Надёжный Type=simple с bootstrap.py)
+# 7. Настройка Systemd автозапуска
 # ------------------------------------------------------------------------------
 log_info "Шаг 5/5: Настройка Systemd службы автозапуска..."
 
@@ -304,8 +333,9 @@ Environment=HOME=${TARGET_HOME}
 Environment=HERMES_HOME=${HERMES_CONFIG_DIR}
 Environment=HERMES_WEBUI_HOST=${WEBUI_HOST}
 Environment=HERMES_WEBUI_PORT=${WEBUI_PORT}
+Environment=HERMES_WEBUI_PYTHON=${HERMES_PYTHON}
 EnvironmentFile=-${WEBUI_DIR}/.env
-ExecStart=/usr/bin/python3 ${WEBUI_DIR}/bootstrap.py --no-browser --foreground --host ${WEBUI_HOST} ${WEBUI_PORT}
+ExecStart=${HERMES_PYTHON} ${WEBUI_DIR}/bootstrap.py --no-browser --foreground --host ${WEBUI_HOST} ${WEBUI_PORT}
 Restart=always
 RestartSec=5
 
@@ -317,7 +347,6 @@ systemctl daemon-reload
 systemctl enable hermes-webui.service
 systemctl restart hermes-webui.service
 
-# Ожидание старта
 sleep 4
 
 # ------------------------------------------------------------------------------
