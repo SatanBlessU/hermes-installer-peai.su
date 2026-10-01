@@ -3,7 +3,7 @@
 # Высокоскоростной автоинсталлятор: Hermes Agent + Hermes WebUI
 # Репозиторий WebUI: https://github.com/nesquena/hermes-webui
 # Официальный инсталлятор: Astral uv tool + Hermes Agent + ctl.sh QuickStart
-# Провайдер модели: https://api.peai.su/v1
+# Провайдер модели: https://api.peai.su/v1 (HERMES_CUSTOM_API_PEAI_SU_API_KEY)
 # Модель по умолчанию: ds/deepseek-v4-flash
 # ==============================================================================
 
@@ -48,7 +48,7 @@ PEAI_API_KEY=""
 DEFAULT_MODEL="ds/deepseek-v4-flash"
 WEBUI_HOST="0.0.0.0"
 WEBUI_PORT="8787"
-WEBUI_DIR="/opt/hermes-webui"
+WEBUI_DIR="${TARGET_HOME}/hermes-webui"
 HERMES_CONFIG_DIR="${TARGET_HOME}/.hermes"
 WEBUI_STATE_DIR="${HERMES_CONFIG_DIR}/webui"
 
@@ -62,7 +62,7 @@ ${BOLD}Использование:${NC}
   curl -fsSL <URL>/install.sh | sudo bash -s -- [ОПЦИИ]
 
 ${BOLD}Опции:${NC}
-  --apikeypeai <KEY>    API-ключ для https://api.peai.su/v1 (по умолчанию: пусто)
+  --apikeypeai <KEY>    API-ключ для https://api.peai.su/v1 (записывается в HERMES_CUSTOM_API_PEAI_SU_API_KEY)
   --model <MODEL_NAME>  Имя модели (по умолчанию: ${DEFAULT_MODEL})
   --port <PORT>         Порт для Hermes WebUI (по умолчанию: ${WEBUI_PORT})
   -h, --help            Показать эту справку
@@ -115,11 +115,12 @@ echo "=================================================================="
 echo -e "${CYAN}${BOLD}   Высокоскоростная установка Hermes Agent & Hermes WebUI${NC}"
 echo "=================================================================="
 log_info "Целевой пользователь: ${TARGET_USER} (${TARGET_HOME})"
+log_info "Каталог WebUI:        ${WEBUI_DIR}"
 log_info "Провайдер LLM:        ${PEAI_BASE_URL}"
 if [[ -n "${PEAI_API_KEY}" ]]; then
-  log_info "API-ключ PEAI:        ${PEAI_API_KEY:0:7}*** (установлен)"
+  log_info "API-ключ PEAI:        ${PEAI_API_KEY:0:7}*** (будет записан в HERMES_CUSTOM_API_PEAI_SU_API_KEY)"
 else
-  log_info "API-ключ PEAI:        <ПУСТОЙ> (будет записан в конфигурацию)"
+  log_info "API-ключ PEAI:        <ПУСТОЙ> (будет записан в HERMES_CUSTOM_API_PEAI_SU_API_KEY)"
 fi
 log_info "Модель по умолчанию:  ${DEFAULT_MODEL}"
 log_info "Порт WebUI:           ${WEBUI_PORT} (Host: ${WEBUI_HOST})"
@@ -151,9 +152,9 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 4. Параллельное развертывание Hermes Agent и Hermes WebUI
+# 4. Параллельное развертывание Hermes Agent и Hermes WebUI в ${WEBUI_DIR}
 # ------------------------------------------------------------------------------
-log_info "Шаг 2/4: Параллельная установка Hermes Agent (uv) и загрузка WebUI..."
+log_info "Шаг 2/4: Параллельная установка Hermes Agent (uv) и загрузка WebUI в ${WEBUI_DIR}..."
 
 # Очистка старых процессов и лок-файлов
 pkill -9 -f 'hermes' 2>/dev/null || true
@@ -163,7 +164,7 @@ pkill -9 -f 'ctl.sh' 2>/dev/null || true
 rm -f /root/.hermes/tools/.install.lock 2>/dev/null || true
 rm -f "${TARGET_HOME}/.hermes/tools/.install.lock" 2>/dev/null || true
 
-# 4.1. Параллельный легковесный клон репозитория WebUI (--depth 1)
+# 4.1. Параллельный легковесный клон репозитория WebUI (--depth 1) в ${WEBUI_DIR}
 (
   systemctl stop hermes-webui.service 2>/dev/null || true
   mkdir -p "$(dirname "$WEBUI_DIR")"
@@ -220,54 +221,308 @@ if [[ -n "$HERMES_AGENT_SRC" && -d "$HERMES_AGENT_SRC" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Применение кастомного провайдера PEAI и автоматическое завершение онбординга
+# 5. Применение кастомного провайдера PEAI, config.yaml, .env и автоонбординг
 # ------------------------------------------------------------------------------
-log_info "Шаг 3/4: Настройка провайдера PEAI (${PEAI_BASE_URL}) и автозавершение онбординга..."
+log_info "Шаг 3/4: Настройка config.yaml, .env и поля HERMES_CUSTOM_API_PEAI_SU_API_KEY..."
 
-cat <<EOF > "${HERMES_CONFIG_DIR}/config.yaml"
-# Hermes Agent Configuration
+cat <<'EOF' > "${HERMES_CONFIG_DIR}/config.yaml"
+_config_version: 49
+database:
+  journal_mode: wal
+runtime:
+  nofile_soft_limit: 4096
+attachments:
+  storage: hermes-home
+plugins:
+  clone_timeout_seconds: 300
 model:
-  default: "${DEFAULT_MODEL}"
+  default: ds/deepseek-v4-flash
   provider: custom
-  base_url: "${PEAI_BASE_URL}"
-  api_key: "${PEAI_API_KEY}"
-  aliases:
-    ds:
-      model: "${DEFAULT_MODEL}"
-      provider: custom
-      base_url: "${PEAI_BASE_URL}"
-      api_key: "${PEAI_API_KEY}"
-    peai:
-      model: "${DEFAULT_MODEL}"
-      provider: custom
-      base_url: "${PEAI_BASE_URL}"
-      api_key: "${PEAI_API_KEY}"
-
-agent:
-  max_turns: 90
-  tool_use_enforcement: true
-
-display:
-  interface: cli
-  language: ru
-
+  base_url: https://api.peai.su/v1
+  api_key: https://api.peai.su/v1
+kanban:
+  review_dispatch: true
+cron:
+  catch_up_missed: true
 terminal:
   backend: local
+  cwd: .
   timeout: 180
+  home_mode: auto
+  docker_mount_cwd_to_workspace: false
+  lifetime_seconds: 300
+  container_cpu: 1
+  container_memory: 5120
+  container_disk: 51200
+  container_persistent: true
+browser:
+  inactivity_timeout: 120
+  extension_control:
+    enabled: false
+tool_loop_guardrails:
+  warnings_enabled: true
+  hard_stop_enabled: false
+  non_interactive_hard_stop_enabled: true
+  warn_after:
+    exact_failure: 2
+    same_tool_failure: 3
+    idempotent_no_progress: 2
+  hard_stop_after:
+    exact_failure: 5
+    same_tool_failure: 8
+    idempotent_no_progress: 5
+compression:
+  enabled: true
+  checkpoint_required: false
+  progress_notices: false
+  threshold: 0.5
+  codex_gpt55_autoraise: true
+  target_ratio: 0.2
+  protect_last_n: 20
+  min_tail_user_messages: 1
+  max_attempts: 3
+  codex_app_server_auto: native
+  codex_responses_native: false
+  codex_responses_compact_threshold: null
+  protect_first_n: 3
+  idle_compact_after_seconds: 0
+  hygiene_max_turn_hold_seconds: 10
+  proactive_prune_tokens: 0
+  proactive_prune_min_result_chars: 8000
+  proactive_prune_min_reclaim_tokens: 4096
+prompt_caching:
+  cache_ttl: 5m
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 2200
+  user_char_limit: 1375
+  nudge_interval: 10
+max_concurrent_sessions: null
+group_sessions_per_user: true
+streaming:
+  enabled: false
+skills:
+  creation_nudge_interval: 15
+agent:
+  max_turns: 150
+  verbose: false
+  reasoning_effort: none
+  service_tier: ''
+  fast_auto_seconds: 60
+gateway:
+  signal_interrupt_grace_timeout: 1
+  delivery_ledger: true
+  platform_connect_timeout: 30
+  loop_watchdog: true
+  loop_watchdog_probe_interval_s: 30.0
+  loop_watchdog_probe_timeout_s: 10.0
+  loop_watchdog_max_strikes: 3
+  allow_all_users: false
+  bot_loop_guard:
+    enabled: true
+    max_events: 20
+    window_seconds: 300
+    cooldown_seconds: 600
+  startup_watchdog: true
+  startup_watchdog_timeout_seconds: 300
+  write_sessions_json: true
+  multiplex_profiles: true
+  auto_multiplex_migration: true
+  profile_routes: []
+  scale_to_zero:
+    idle_timeout_minutes: 2
+  restart_loop_guard:
+    max_restarts: 3
+    window_seconds: 60
+    max_gap_seconds: 300
+  respawn_storm:
+    max_starts: 5
+    window_seconds: 120
+  message_timestamps:
+    enabled: false
+  max_inbound_media_bytes: 134217728
+  trust_env: true
+  strict: false
+  media_delivery_allow_dirs: []
+  trust_recent_files: true
+  trust_recent_files_seconds: 600
+  api_server:
+    max_concurrent_runs: 10
+    history_tool_output_max_chars: 0
+platform_toolsets:
+  cli:
+  - hermes-cli
+  telegram:
+  - hermes-telegram
+  discord:
+  - hermes-discord
+  whatsapp:
+  - hermes-whatsapp
+  slack:
+  - hermes-slack
+  signal:
+  - hermes-signal
+  homeassistant:
+  - hermes-homeassistant
+  qqbot:
+  - hermes-qqbot
+  yuanbao:
+  - hermes-yuanbao
+  teams:
+  - hermes-teams
+  google_chat:
+  - hermes-google_chat
+stt:
+  enabled: true
+  local:
+    model: base
+  language: en
+  openai:
+    model: whisper-1
+    language: ''
+    timeout: 60
+    max_retries: 1
+code_execution:
+  timeout: 300
+  max_tool_calls: 50
+delegation:
+  max_iterations: 250
+display:
+  compact: false
+  cleanup_progress: false
+  suppress_warning_notifications: false
+  busy_input_mode: interrupt
+  background_process_notifications: concise
+  bell_on_complete: false
+  bell_on_prompt: false
+  streaming: true
+  skin: default
+telemetry:
+  shared_metrics:
+    enabled: false
+    send: false
+auth:
+  adopt_external_logins: true
+  codex_login_flow: device_code
+updates:
+  check: true
+  pre_update_backup: false
+  backup_keep: 5
+  non_interactive_local_changes: stash
+custom_providers:
+- name: Api.peai.su
+  base_url: https://api.peai.su/v1
+  key_env: HERMES_CUSTOM_API_PEAI_SU_API_KEY
+  model: ds/deepseek-v4-flash
+  models:
+    nano-banana-lite: {}
+    nano-banana: {}
+    nano-banana-pro: {}
+    ag/gemini-3.7-flash-high: {}
+    ag/gemini-3.7-flash-medium: {}
+    ag/gemini-3.7-flash-low: {}
+    ag/gemini-3.6-flash-high: {}
+    ag/gemini-3.6-flash-medium: {}
+    ag/gemini-3.6-flash-low: {}
+    ag/gemini-pro-agent: {}
+    ag/gemini-3.1-pro-low: {}
+    ag/claude-sonnet-4-6: {}
+    ag/gpt-oss-120b-medium: {}
+    ag/gemini-3-flash: {}
+    ag/gemini-2.5-flash: {}
+    ag/gemini-2.5-flash-lite: {}
+    ag/gemini-3.1-flash-lite-preview: {}
+    am/nemotron-3-ultra-550b-a55b: {}
+    am/gpt-oss-20b: {}
+    am/nemotron-3-super-120b-a12b: {}
+    am/nemotron-3.5-lightning-30b-a3b: {}
+    am/laguna-xs-2.1: {}
+    am/kimi-k3: {}
+    am/llama-3.2-11b-vision-instruct: {}
+    am/nemotron-3-nano-omni-30b-a3b-reasoning: {}
+    am/diffusiongemma-26b-a4b-it: {}
+    am/riva-translate-4b-instruct-v2: {}
+    am/nemotron-3.5-content-safety: {}
+    cx/gpt-6-astra: {}
+    cx/gpt-6-sol: {}
+    cx/gpt-6-sol-review: {}
+    cx/gpt-6-luna: {}
+    cx/gpt-6-luna-review: {}
+    cx/gpt-5.6-sol: {}
+    cx/gpt-5.6-sol-review: {}
+    cx/gpt-5.6-terra: {}
+    cx/gpt-5.6-terra-review: {}
+    cx/gpt-5.6-luna: {}
+    cx/gpt-5.6-luna-review: {}
+    cx/gpt-5.5: {}
+    cx/gpt-5.5-review: {}
+    kmc/kimi-for-coding: {}
+    kmc/k3: {}
+    glm/glm-5.3: {}
+    glm/glm-5.3-flash: {}
+    glm/glm-5.2: {}
+    glm/glm-5.1: {}
+    glm/glm-5: {}
+    glm/glm-4.7: {}
+    glm/glm-4.6v: {}
+    gcli/grok-4.7: {}
+    gcli/grok-4.7-build-fast: {}
+    gcli/grok-4.6: {}
+    gcli/grok-4.5: {}
+    xai/grok-4.7: {}
+    xai/grok-4.6: {}
+    xai/grok-4.5: {}
+    xai/grok-4.3: {}
+    xai/grok-build-0.1: {}
+    xai/grok-4.20-0309-reasoning: {}
+    xai/grok-4.20-0309-non-reasoning: {}
+    xai/grok-4.20-multi-agent-0309: {}
+    cc/claude-opus-5: {}
+    cc/claude-fable-5: {}
+    cc/claude-sonnet-5: {}
+    cc/claude-opus-4-8: {}
+    cc/claude-opus-4-7: {}
+    cc/claude-opus-4-6: {}
+    cc/claude-sonnet-4-6: {}
+    cc/claude-haiku-4-5-20251001: {}
+    cc/claude-opus-4-5-20251101: {}
+    cc/claude-sonnet-4-5-20250929: {}
+    ds/deepseek-v4-pro: {}
+    ds/deepseek-v4-flash: {}
+    qwen/qwen3.8-max: {}
+    qwen/qwen3.7-max: {}
+    qwen/qwen3.7-plus: {}
+    flow/nano-banana-pro: {}
+    flow/nano-banana: {}
+    flow/nano-banana-lite: {}
+    am/free: {}
+  models_discovered: true
 EOF
 
 cat <<EOF > "${HERMES_CONFIG_DIR}/.env"
-OPENAI_BASE_URL="${PEAI_BASE_URL}"
-OPENAI_API_BASE="${PEAI_BASE_URL}"
-OPENAI_API_KEY="${PEAI_API_KEY}"
-HERMES_BASE_URL="${PEAI_BASE_URL}"
-HERMES_API_KEY="${PEAI_API_KEY}"
-PEAI_BASE_URL="${PEAI_BASE_URL}"
-PEAI_API_KEY="${PEAI_API_KEY}"
-HERMES_WEBUI_DEFAULT_MODEL="${DEFAULT_MODEL}"
-HERMES_WEBUI_PYTHON="${HERMES_PYTHON}"
-HERMES_WEBUI_SKIP_ONBOARDING="1"
-HERMES_WEBUI_ONBOARDING_OPEN="1"
+# Hermes Agent Environment Configuration
+TERMINAL_MODAL_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
+TERMINAL_TIMEOUT=60
+TERMINAL_LIFETIME_SECONDS=300
+BROWSERBASE_PROXIES=true
+BROWSERBASE_ADVANCED_STEALTH=false
+BROWSER_SESSION_TIMEOUT=300
+BROWSER_INACTIVITY_TIMEOUT=120
+WEB_TOOLS_DEBUG=false
+VISION_TOOLS_DEBUG=false
+MOA_TOOLS_DEBUG=false
+IMAGE_TOOLS_DEBUG=false
+HERMES_CUSTOM_API_PEAI_SU_API_KEY=${PEAI_API_KEY}
+OPENAI_BASE_URL=${PEAI_BASE_URL}
+OPENAI_API_KEY=${PEAI_API_KEY}
+HERMES_BASE_URL=${PEAI_BASE_URL}
+HERMES_API_KEY=${PEAI_API_KEY}
+HERMES_WEBUI_DEFAULT_MODEL=${DEFAULT_MODEL}
+HERMES_WEBUI_PYTHON=${HERMES_PYTHON}
+HERMES_WEBUI_AGENT_DIR=${HERMES_AGENT_SRC}
+HERMES_WEBUI_SKIP_ONBOARDING=1
+HERMES_WEBUI_ONBOARDING_OPEN=1
 EOF
 
 # Инициализация settings.json для WebUI с onboarding_completed: true
@@ -288,17 +543,7 @@ chown -R "${TARGET_USER}:${TARGET_USER}" "${HERMES_CONFIG_DIR}" "${TARGET_HOME}/
 chmod 600 "${HERMES_CONFIG_DIR}/.env"
 chmod 644 "${HERMES_CONFIG_DIR}/config.yaml" "${WEBUI_STATE_DIR}/settings.json"
 
-su - "$TARGET_USER" -c "
-  export PATH=\"\$HOME/.local/bin:/usr/local/bin:\$PATH\"
-  if command -v hermes >/dev/null 2>&1; then
-    hermes config set model.provider custom 2>/dev/null || true
-    hermes config set model.base_url \"${PEAI_BASE_URL}\" 2>/dev/null || true
-    hermes config set model.default \"${DEFAULT_MODEL}\" 2>/dev/null || true
-    hermes config set model.api_key \"${PEAI_API_KEY}\" 2>/dev/null || true
-  fi
-"
-
-log_success "Конфигурация PEAI сохранена, мастер первого запуска помечен завершенным."
+log_success "Файлы config.yaml и .env успешно настроены (HERMES_CUSTOM_API_PEAI_SU_API_KEY='${PEAI_API_KEY}')."
 
 # ------------------------------------------------------------------------------
 # 6. Настройка Hermes WebUI и автозапуск через Systemd
@@ -317,6 +562,7 @@ HERMES_WEBUI_PYTHON=${HERMES_PYTHON}
 HERMES_WEBUI_AGENT_DIR=${HERMES_AGENT_SRC}
 HERMES_WEBUI_SKIP_ONBOARDING=1
 HERMES_WEBUI_ONBOARDING_OPEN=1
+HERMES_CUSTOM_API_PEAI_SU_API_KEY=${PEAI_API_KEY}
 OPENAI_BASE_URL=${PEAI_BASE_URL}
 OPENAI_API_KEY=${PEAI_API_KEY}
 HERMES_WEBUI_CTL_ALLOW_SYSTEMD_CONFLICT=1
@@ -376,8 +622,9 @@ echo "=================================================================="
 echo -e "${GREEN}${BOLD}             УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
 echo "=================================================================="
 echo -e " • Hermes WebUI в автозапуске:  ${BOLD}${WEBUI_ENABLED}${NC} (Статус: ${WEBUI_ACTIVE})"
+echo -e " • Каталог WebUI:               ${BOLD}${WEBUI_DIR}${NC}"
 echo -e " • Провайдер LLM:               ${CYAN}${PEAI_BASE_URL}${NC}"
-echo -e " • Модель по умолчанию:         ${GREEN}${DEFAULT_MODEL}${NC}"
+echo -e " • Поле ключа в .env:           ${BOLD}HERMES_CUSTOM_API_PEAI_SU_API_KEY${NC}"
 if [[ -n "${PEAI_API_KEY}" ]]; then
   echo -e " • API-ключ:                    ${GREEN}Задан (${PEAI_API_KEY:0:7}***)${NC}"
 else

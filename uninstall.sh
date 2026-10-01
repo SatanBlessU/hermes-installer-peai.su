@@ -75,9 +75,11 @@ log_success "Все фоновые процессы завершены."
 # ------------------------------------------------------------------------------
 log_info "3. Очистка каталогов установки, .hermes и виртуальных окружений..."
 
-# Удаление WebUI
-rm -rf /opt/hermes-webui
-rm -rf /tmp/check-webui
+# Удаление WebUI из всех возможных каталогов (/root/hermes-webui, /opt/hermes-webui)
+rm -rf /root/hermes-webui 2>/dev/null || true
+rm -rf "${TARGET_HOME}/hermes-webui" 2>/dev/null || true
+rm -rf /opt/hermes-webui 2>/dev/null || true
+rm -rf /tmp/check-webui 2>/dev/null || true
 
 # Удаление всех каталогов .hermes у всех пользователей и root
 rm -rf /root/.hermes
@@ -86,6 +88,7 @@ rm -rf "${TARGET_HOME}/.hermes"
 for u_home in /home/*; do
   if [[ -d "$u_home" ]]; then
     rm -rf "${u_home}/.hermes"
+    rm -rf "${u_home}/hermes-webui"
   fi
 done
 
@@ -110,7 +113,7 @@ rm -f /root/.local/bin/hermes-acp
 rm -rf "${TARGET_HOME}/.local/share/uv/tools/hermes-agent" 2>/dev/null || true
 rm -rf "/root/.local/share/uv/tools/hermes-agent" 2>/dev/null || true
 
-log_success "Каталоги .hermes и все файлы успешно удалены."
+log_success "Каталоги .hermes, hermes-webui и все файлы успешно удалены."
 
 # ------------------------------------------------------------------------------
 # 4. Очистка правил фаервола
@@ -125,5 +128,5 @@ fi
 echo "=================================================================="
 echo -e "${GREEN}${BOLD}             СИСТЕМА ПОЛНОСТЬЮ ОЧИЩЕНА!${NC}"
 echo "=================================================================="
-echo "Папки .hermes и все службы удалены. Сервер готов к чистой установке."
+echo "Папки .hermes, hermes-webui и все службы удалены. Сервер готов к чистой установке."
 echo "=================================================================="
