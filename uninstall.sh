@@ -43,13 +43,11 @@ log_info "Целевой пользователь: ${TARGET_USER} (${TARGET_HOME
 log_info "1. Остановка и отключение служб systemd..."
 
 for service in hermes-webui.service hermes-agent.service; do
-  if systemctl list-unit-files | grep -qw "$service"; then
-    log_info "Отключение ${service}..."
-    systemctl stop "$service" 2>/dev/null || true
-    systemctl disable "$service" 2>/dev/null || true
-  fi
+  systemctl stop "$service" 2>/dev/null || true
+  systemctl disable "$service" 2>/dev/null || true
   rm -f "/etc/systemd/system/${service}"
   rm -f "/etc/systemd/system/multi-user.target.wants/${service}"
+  rm -f "/etc/systemd/system/${service}.d"/* 2>/dev/null || true
 done
 
 systemctl daemon-reload
@@ -67,37 +65,55 @@ pkill -9 -f 'ctl.sh' 2>/dev/null || true
 pkill -9 -f 'hermes gateway' 2>/dev/null || true
 pkill -9 -f 'hermes setup' 2>/dev/null || true
 pkill -9 -f 'hermes_cli' 2>/dev/null || true
+pkill -9 -f 'hermes-agent' 2>/dev/null || true
+pkill -9 -f 'server.py' 2>/dev/null || true
 
 log_success "Все фоновые процессы завершены."
 
 # ------------------------------------------------------------------------------
-# 3. Удаление файлов WebUI и конфигураций
+# 3. Полное удаление файлов, конфигураций и каталогов .hermes
 # ------------------------------------------------------------------------------
-log_info "3. Очистка директорий установки и конфигураций..."
+log_info "3. Очистка каталогов установки, .hermes и виртуальных окружений..."
 
-# Удаление Hermes WebUI
+# Удаление WebUI
 rm -rf /opt/hermes-webui
+rm -rf /tmp/check-webui
 
-# Удаление данных Hermes Agent
-rm -rf "${TARGET_HOME}/.hermes"
+# Удаление всех каталогов .hermes у всех пользователей и root
 rm -rf /root/.hermes
+rm -rf /root/.hermes_state 2>/dev/null || true
+rm -rf "${TARGET_HOME}/.hermes"
+for u_home in /home/*; do
+  if [[ -d "$u_home" ]]; then
+    rm -rf "${u_home}/.hermes"
+  fi
+done
+
+# Удаление глобальных каталогов hermes-agent
+rm -rf /usr/local/lib/hermes-agent 2>/dev/null || true
+rm -rf /usr/lib/hermes-agent 2>/dev/null || true
+rm -rf /opt/hermes-agent 2>/dev/null || true
 
 # Удаление бинарников и симлинков
 rm -f /usr/local/bin/hermes
 rm -f /usr/local/bin/hermes-agent
 rm -f /usr/local/bin/hermes-acp
+rm -f /usr/bin/hermes
 rm -f "${TARGET_HOME}/.local/bin/hermes"
 rm -f "${TARGET_HOME}/.local/bin/hermes-agent"
 rm -f "${TARGET_HOME}/.local/bin/hermes-acp"
+rm -f /root/.local/bin/hermes
+rm -f /root/.local/bin/hermes-agent
+rm -f /root/.local/bin/hermes-acp
 
-# Удаление uv tool окружения для hermes
+# Удаление uv tool окружений
 rm -rf "${TARGET_HOME}/.local/share/uv/tools/hermes-agent" 2>/dev/null || true
 rm -rf "/root/.local/share/uv/tools/hermes-agent" 2>/dev/null || true
 
-log_success "Файлы и директории успешно удалены."
+log_success "Каталоги .hermes и все файлы успешно удалены."
 
 # ------------------------------------------------------------------------------
-# 4. Сброс правил фаервола (опционально)
+# 4. Очистка правил фаервола
 # ------------------------------------------------------------------------------
 if command -v ufw >/dev/null 2>&1; then
   if ufw status 2>/dev/null | grep -qw "active"; then
@@ -109,5 +125,5 @@ fi
 echo "=================================================================="
 echo -e "${GREEN}${BOLD}             СИСТЕМА ПОЛНОСТЬЮ ОЧИЩЕНА!${NC}"
 echo "=================================================================="
-echo "Теперь сервер чист и готов к повторному запуску скрипта установки."
+echo "Папки .hermes и все службы удалены. Сервер готов к чистой установке."
 echo "=================================================================="
