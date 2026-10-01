@@ -185,30 +185,51 @@ fi
 
 # Точное определение Python-интерпретатора агента
 HERMES_PYTHON=""
+
+# 1. Поиск python внутри bash-обёртки /usr/local/bin/hermes или ~/.local/bin/hermes
 if [[ -n "$HERMES_BIN" && -f "$HERMES_BIN" ]]; then
-  FIRST_LINE=$(head -n 1 "$HERMES_BIN" 2>/dev/null || true)
-  if [[ "$FIRST_LINE" =~ ^#!(.*) ]]; then
-    CAND_PY="${BASH_REMATCH[1]}"
-    CAND_PY=$(echo "$CAND_PY" | awk '{print $1}')
-    if [[ -x "$CAND_PY" ]]; then
-      HERMES_PYTHON="$CAND_PY"
+  EXEC_PY=$(grep -E 'exec\s+.*python' "$HERMES_BIN" 2>/dev/null | sed -E 's/.*exec[[:space:]]+["'\''"]?([^"'\''][^[:space:]]*python[^"'\''][^[:space:]]*)["'\''"]?.*/\1/' | head -n 1 || true)
+  if [[ -n "$EXEC_PY" && -x "$EXEC_PY" ]]; then
+    HERMES_PYTHON="$EXEC_PY"
+  else
+    FIRST_LINE=$(head -n 1 "$HERMES_BIN" 2>/dev/null || true)
+    if [[ "$FIRST_LINE" =~ ^#!(.*) ]]; then
+      CAND_PY="${BASH_REMATCH[1]}"
+      CAND_PY=$(echo "$CAND_PY" | awk '{print $1}')
+      if [[ -x "$CAND_PY" && "$CAND_PY" =~ python ]]; then
+        HERMES_PYTHON="$CAND_PY"
+      fi
     fi
   fi
 fi
 
+# 2. Поиск по известным путям виртуальных окружений
 if [[ -z "$HERMES_PYTHON" || ! -x "$HERMES_PYTHON" ]]; then
   for py_cand in \
+    "/usr/local/lib/hermes-agent/venv/bin/python3" \
+    "/usr/local/lib/hermes-agent/venv/bin/python" \
     "${TARGET_HOME}/.local/share/uv/tools/hermes-agent/bin/python3" \
     "${TARGET_HOME}/.local/share/uv/tools/hermes-agent/bin/python" \
     "${TARGET_HOME}/.hermes/hermes-agent/.venv/bin/python3" \
+    "${TARGET_HOME}/.hermes/hermes-agent/.venv/bin/python" \
     "${TARGET_HOME}/.hermes/.venv/bin/python3" \
-    $(find "${TARGET_HOME}/.hermes" -type f -name "python3" -perm -111 2>/dev/null || true) \
+    "${TARGET_HOME}/.hermes/.venv/bin/python" \
+    $(find "${TARGET_HOME}/.hermes" /usr/local/lib/hermes-agent -type f \( -name "python3" -o -name "python" \) -perm -111 2>/dev/null || true) \
     "$(which python3)"; do
     if [[ -n "$py_cand" && -x "$py_cand" ]]; then
-      HERMES_PYTHON="$py_cand"
-      break
+      # Проверяем, может ли этот python импортировать hermes_cli
+      if "$py_cand" -c 'import hermes_cli' >/dev/null 2>&1; then
+        HERMES_PYTHON="$py_cand"
+        break
+      elif [[ -z "$HERMES_PYTHON" ]]; then
+        HERMES_PYTHON="$py_cand"
+      fi
     fi
   done
+fi
+
+if [[ -z "$HERMES_PYTHON" ]]; then
+  HERMES_PYTHON="/usr/bin/python3"
 fi
 
 log_success "Интерпретатор Python агента: ${HERMES_PYTHON}"
