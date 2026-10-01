@@ -50,6 +50,7 @@ WEBUI_HOST="0.0.0.0"
 WEBUI_PORT="8787"
 WEBUI_DIR="/opt/hermes-webui"
 HERMES_CONFIG_DIR="${TARGET_HOME}/.hermes"
+WEBUI_STATE_DIR="${HERMES_CONFIG_DIR}/webui"
 
 # ------------------------------------------------------------------------------
 # 2. Обработка CLI флагов
@@ -154,7 +155,7 @@ fi
 # ------------------------------------------------------------------------------
 log_info "Шаг 2/4: Параллельная установка Hermes Agent (uv) и загрузка WebUI..."
 
-# Очистка зависших процессов и лок-файлов
+# Очистка старых процессов и лок-файлов
 pkill -9 -f 'hermes' 2>/dev/null || true
 pkill -9 -f 'bootstrap.py' 2>/dev/null || true
 pkill -9 -f 'server.py' 2>/dev/null || true
@@ -207,12 +208,21 @@ if [[ ! -x "$HERMES_PYTHON" ]]; then
 fi
 log_success "Окружение Python: ${HERMES_PYTHON}"
 
-# ------------------------------------------------------------------------------
-# 5. Применение кастомного провайдера PEAI и модели ds/deepseek-v4-flash
-# ------------------------------------------------------------------------------
-log_info "Шаг 3/4: Настройка провайдера PEAI (${PEAI_BASE_URL})..."
+# Привязка пакетов agent к каталогу .hermes/hermes-agent для обнаружения WebUI
+HERMES_AGENT_SRC=""
+if [[ -x "$HERMES_PYTHON" ]]; then
+  HERMES_AGENT_SRC=$("$HERMES_PYTHON" -c 'import run_agent, pathlib; print(pathlib.Path(run_agent.__file__).parent)' 2>/dev/null || true)
+fi
 
 mkdir -p "${HERMES_CONFIG_DIR}"
+if [[ -n "$HERMES_AGENT_SRC" && -d "$HERMES_AGENT_SRC" ]]; then
+  ln -sfn "$HERMES_AGENT_SRC" "${HERMES_CONFIG_DIR}/hermes-agent"
+fi
+
+# ------------------------------------------------------------------------------
+# 5. Применение кастомного провайдера PEAI и автоматическое завершение онбординга
+# ------------------------------------------------------------------------------
+log_info "Шаг 3/4: Настройка провайдера PEAI (${PEAI_BASE_URL}) и автозавершение онбординга..."
 
 cat <<EOF > "${HERMES_CONFIG_DIR}/config.yaml"
 # Hermes Agent Configuration
@@ -256,11 +266,27 @@ PEAI_BASE_URL="${PEAI_BASE_URL}"
 PEAI_API_KEY="${PEAI_API_KEY}"
 HERMES_WEBUI_DEFAULT_MODEL="${DEFAULT_MODEL}"
 HERMES_WEBUI_PYTHON="${HERMES_PYTHON}"
+HERMES_WEBUI_SKIP_ONBOARDING="1"
+HERMES_WEBUI_ONBOARDING_OPEN="1"
 EOF
 
-chown -R "${TARGET_USER}:${TARGET_USER}" "${HERMES_CONFIG_DIR}"
+# Инициализация settings.json для WebUI с onboarding_completed: true
+mkdir -p "${WEBUI_STATE_DIR}" "${TARGET_HOME}/workspace"
+cat <<EOF > "${WEBUI_STATE_DIR}/settings.json"
+{
+  "onboarding_completed": true,
+  "default_model": "${DEFAULT_MODEL}",
+  "default_model_provider": "custom",
+  "default_workspace": "${TARGET_HOME}/workspace",
+  "password_hash": null,
+  "auth_disabled_acknowledged": true,
+  "bot_name": "Hermes"
+}
+EOF
+
+chown -R "${TARGET_USER}:${TARGET_USER}" "${HERMES_CONFIG_DIR}" "${TARGET_HOME}/workspace"
 chmod 600 "${HERMES_CONFIG_DIR}/.env"
-chmod 644 "${HERMES_CONFIG_DIR}/config.yaml"
+chmod 644 "${HERMES_CONFIG_DIR}/config.yaml" "${WEBUI_STATE_DIR}/settings.json"
 
 su - "$TARGET_USER" -c "
   export PATH=\"\$HOME/.local/bin:/usr/local/bin:\$PATH\"
@@ -272,10 +298,10 @@ su - "$TARGET_USER" -c "
   fi
 "
 
-log_success "Конфигурация PEAI и модели ${DEFAULT_MODEL} сохранена."
+log_success "Конфигурация PEAI сохранена, мастер первого запуска помечен завершенным."
 
 # ------------------------------------------------------------------------------
-# 6. Настройка Hermes WebUI и автозапуск через Systemd + ctl.sh
+# 6. Настройка Hermes WebUI и автозапуск через Systemd
 # ------------------------------------------------------------------------------
 log_info "Шаг 4/4: Запуск Hermes WebUI и настройка Systemd автозапуска..."
 
@@ -285,8 +311,12 @@ cat <<EOF > "${WEBUI_DIR}/.env"
 HERMES_WEBUI_HOST=${WEBUI_HOST}
 HERMES_WEBUI_PORT=${WEBUI_PORT}
 HERMES_HOME=${HERMES_CONFIG_DIR}
+HERMES_WEBUI_STATE_DIR=${WEBUI_STATE_DIR}
 HERMES_WEBUI_DEFAULT_MODEL=${DEFAULT_MODEL}
 HERMES_WEBUI_PYTHON=${HERMES_PYTHON}
+HERMES_WEBUI_AGENT_DIR=${HERMES_AGENT_SRC}
+HERMES_WEBUI_SKIP_ONBOARDING=1
+HERMES_WEBUI_ONBOARDING_OPEN=1
 OPENAI_BASE_URL=${PEAI_BASE_URL}
 OPENAI_API_KEY=${PEAI_API_KEY}
 HERMES_WEBUI_CTL_ALLOW_SYSTEMD_CONFLICT=1
@@ -295,7 +325,7 @@ EOF
 chmod +x "${WEBUI_DIR}/ctl.sh"
 chown -R "${TARGET_USER}:${TARGET_USER}" "${WEBUI_DIR}"
 
-# Настройка автозапуска в Systemd (Type=simple с прямым запуском server.py)
+# Настройка автозапуска в Systemd
 cat <<EOF > /etc/systemd/system/hermes-webui.service
 [Unit]
 Description=Hermes Web UI Service
@@ -308,9 +338,13 @@ User=${TARGET_USER}
 WorkingDirectory=${WEBUI_DIR}
 Environment=HOME=${TARGET_HOME}
 Environment=HERMES_HOME=${HERMES_CONFIG_DIR}
+Environment=HERMES_WEBUI_STATE_DIR=${WEBUI_STATE_DIR}
 Environment=HERMES_WEBUI_HOST=${WEBUI_HOST}
 Environment=HERMES_WEBUI_PORT=${WEBUI_PORT}
 Environment=HERMES_WEBUI_PYTHON=${HERMES_PYTHON}
+Environment=HERMES_WEBUI_AGENT_DIR=${HERMES_AGENT_SRC}
+Environment=HERMES_WEBUI_SKIP_ONBOARDING=1
+Environment=HERMES_WEBUI_ONBOARDING_OPEN=1
 EnvironmentFile=-${WEBUI_DIR}/.env
 ExecStart=${HERMES_PYTHON} ${WEBUI_DIR}/server.py
 Restart=always
@@ -349,6 +383,7 @@ if [[ -n "${PEAI_API_KEY}" ]]; then
 else
   echo -e " • API-ключ:                    ${YELLOW}<Пусто>${NC} (можно задать позже)"
 fi
+echo -e " • Онбординг (мастер настройки): ${GREEN}Автоматически пройден (готово к чату)${NC}"
 echo -e " • Панель WebUI доступна по:    ${BOLD}http://${SERVER_IP}:${WEBUI_PORT}${NC}"
 echo "=================================================================="
 echo -e "${BOLD}Команды управления:${NC}"
