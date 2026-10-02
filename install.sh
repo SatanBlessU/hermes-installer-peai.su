@@ -190,13 +190,10 @@ rm -f "${TARGET_HOME}/.hermes/tools/.install.lock" 2>/dev/null || true
 ) &
 WEBUI_CLONE_PID=$!
 
-# 4.2. Установка официального быстрого uv и последней версии hermes-agent
+# 4.2. Установка официальным скриптом Nous Research Hermes Agent
+log_info "Установка Hermes Agent через официальный скрипт..."
 su - "$TARGET_USER" -c '
-  if ! command -v uv >/dev/null 2>&1; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
-  fi
-  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-  uv tool install --force hermes-agent >/dev/null 2>&1
+  curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --non-interactive --skip-browser
 '
 
 # Ожидание клонирования WebUI
@@ -204,7 +201,7 @@ wait "$WEBUI_CLONE_PID"
 
 # Определение бинарника hermes и виртуального окружения python
 HERMES_BIN=""
-for path_cand in "${TARGET_HOME}/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes"; do
+for path_cand in "${TARGET_HOME}/.local/bin/hermes" "${HERMES_CONFIG_DIR}/hermes-agent/.hermes/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes"; do
   if [[ -x "$path_cand" ]]; then
     HERMES_BIN="$path_cand"
     break
@@ -216,20 +213,39 @@ if [[ -n "$HERMES_BIN" ]]; then
   log_success "Hermes Agent бинарник: ${HERMES_BIN}"
 fi
 
-HERMES_PYTHON="${TARGET_HOME}/.local/share/uv/tools/hermes-agent/bin/python"
-if [[ ! -x "$HERMES_PYTHON" ]]; then
-  HERMES_PYTHON=$(find "${TARGET_HOME}/.local/share/uv" -type f -name "python" -perm -111 2>/dev/null | head -n 1 || which python3)
+# Настройка провайдера через официальные команды hermes config set
+log_info "Настройка конфигурации модели через hermes config set..."
+su - "$TARGET_USER" -c "
+  export PATH=\"\$HOME/.local/bin:\$PATH\"
+  hermes config set model.provider \"custom\"
+  hermes config set model.base_url \"${PEAI_BASE_URL}\"
+  hermes config set model.default \"${DEFAULT_MODEL}\"
+  if [[ -n \"${PEAI_API_KEY}\" ]]; then
+    hermes config set model.api_key \"${PEAI_API_KEY}\"
+  fi
+"
+
+HERMES_PYTHON=""
+for py_cand in "${TARGET_HOME}/.hermes/tools"/python-*/bin/python3 "${TARGET_HOME}/.local/share/uv/tools/hermes-agent/bin/python"; do
+  if [[ -x "$py_cand" ]]; then
+    HERMES_PYTHON="$py_cand"
+    break
+  fi
+done
+
+if [[ -z "$HERMES_PYTHON" || ! -x "$HERMES_PYTHON" ]]; then
+  HERMES_PYTHON=$(find "${HERMES_CONFIG_DIR}" -type f -name "python" -perm -111 2>/dev/null | head -n 1 || which python3)
 fi
 log_success "Окружение Python: ${HERMES_PYTHON}"
 
 # Привязка пакетов agent к каталогу .hermes/hermes-agent для обнаружения WebUI
-HERMES_AGENT_SRC=""
-if [[ -x "$HERMES_PYTHON" ]]; then
+HERMES_AGENT_SRC="${TARGET_HOME}/.hermes/hermes-agent"
+if [[ ! -d "$HERMES_AGENT_SRC" && -x "$HERMES_PYTHON" ]]; then
   HERMES_AGENT_SRC=$("$HERMES_PYTHON" -c 'import run_agent, pathlib; print(pathlib.Path(run_agent.__file__).parent)' 2>/dev/null || true)
 fi
 
 mkdir -p "${HERMES_CONFIG_DIR}"
-if [[ -n "$HERMES_AGENT_SRC" && -d "$HERMES_AGENT_SRC" ]]; then
+if [[ -n "$HERMES_AGENT_SRC" && -d "$HERMES_AGENT_SRC" && "$HERMES_AGENT_SRC" != "${HERMES_CONFIG_DIR}/hermes-agent" ]]; then
   ln -sfn "$HERMES_AGENT_SRC" "${HERMES_CONFIG_DIR}/hermes-agent"
 fi
 
