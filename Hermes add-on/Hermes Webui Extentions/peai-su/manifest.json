@@ -1,0 +1,15 @@
+{
+  "extensions": [
+    {
+      "id": "peai-su",
+      "name": "Peai-SU Server Branding",
+      "description": "Server-side branding: titlebar logo, empty-state mark, and favicon served from the extension's own folder on the server. Configure via brand.json; no browser storage, no upload UI.",
+      "scripts": [
+        "assets/branding.js"
+      ],
+      "stylesheets": [
+        "assets/branding.css"
+      ]
+    }
+  ]
+}

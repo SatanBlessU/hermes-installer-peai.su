@@ -1,0 +1,47 @@
+/* Peai-SU server branding — the injected <img> matches the EXACT size of the
+   native mark it replaces, and object-fit: contain lets an image of any
+   dimensions adapt without distortion or layout breakage.
+
+   Native sizes measured from core static/style.css + static/index.html:
+     - .app-titlebar-icon > svg : 16 x 16
+     - .empty-logo > svg        : 88 x 88   (style.css: .empty-logo svg{width:88px;height:88px}) */
+
+/* ── Titlebar mark (native 16x16) ─────────────────────────────────────────── */
+.app-titlebar-icon .peai-su-logo-img.peai-su-logo-titlebar {
+  width: 16px !important;
+  height: 16px !important;
+  max-width: 16px;
+  max-height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+  object-fit: contain;
+  object-position: center;
+}
+
+/* ── Empty-state hero mark (native 88x88) ─────────────────────────────────── */
+.empty-logo .peai-su-logo-img.peai-su-logo-hero {
+  position: relative;
+  z-index: 1;
+  width: 88px !important;
+  height: 88px !important;
+  max-width: 88px;
+  max-height: 88px;
+  display: block;
+  object-fit: contain;
+  object-position: center;
+}
+
+/* Keep the titlebar container's flex alignment identical to the native mark. */
+.app-titlebar-icon.peai-su-logo-set {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Hide the native mark only while our image is actually present, so there is
+   never a moment with neither the custom nor the default logo. */
+.app-titlebar-icon.peai-su-logo-set > svg,
+.empty-logo.peai-su-logo-set > svg {
+  display: none !important;
+}

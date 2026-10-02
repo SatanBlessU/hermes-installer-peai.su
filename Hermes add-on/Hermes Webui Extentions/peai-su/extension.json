@@ -1,0 +1,47 @@
+{
+  "id": "peai-su",
+  "name": "Peai-SU Server Branding",
+  "description": "Server-side branding for Hermes WebUI: the titlebar logo, empty-state mark, and browser favicon are served as static files from the extension's own folder on the server, so every client on any device loads the same icons with zero browser storage. Configure which images to apply in brand.json inside the extension folder; replace the files there to rebrand.",
+  "version": "0.1.0",
+  "author": "peai-su",
+  "assets": {
+    "scripts": [
+      "assets/branding.js"
+    ],
+    "stylesheets": [
+      "assets/branding.css"
+    ]
+  },
+  "capabilities": [
+    "manifest-bundle"
+  ],
+  "lifecycle": {
+    "webui_restart_required": false,
+    "sidecar_start_required": false,
+    "native_host_start_required": false,
+    "native_host_autostart": "none"
+  },
+  "screenshots": [],
+  "permissions": {
+    "webui_api": {
+      "read": [],
+      "write": []
+    },
+    "webui_navigation": false,
+    "dom": {
+      "owned": true,
+      "mutates_core_views": true
+    },
+    "storage": {
+      "owned": [],
+      "shared_webui_keys": []
+    },
+    "loopback_sidecar": false,
+    "native_host": false,
+    "filesystem": {
+      "arbitrary": false,
+      "serves_bundled_assets": true
+    },
+    "network_external": false
+  }
+}

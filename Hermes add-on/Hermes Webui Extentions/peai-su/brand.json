@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "logo": {
+    "light": "assets/brand/logo.png",
+    "dark": "assets/brand/logo-dark.png"
+  },
+  "favicon": "assets/brand/favicon.png",
+  "apply_to": [
+    "titlebar",
+    "empty_state",
+    "favicon"
+  ],
+  "version": "1"
+}
